@@ -1,0 +1,14 @@
+services:
+  polybot:
+    build: .
+    container_name: polybot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./state:/app/state
+      - ./config.yaml:/app/config.yaml:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

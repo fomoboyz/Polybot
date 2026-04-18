@@ -1,0 +1,25 @@
+[Unit]
+Description=Polybot Polymarket autonomous trader
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=polybot
+WorkingDirectory=/opt/polybot
+EnvironmentFile=/opt/polybot/.env
+ExecStart=/opt/polybot/.venv/bin/python -m polybot
+Restart=always
+RestartSec=10
+# Clean shutdown: allow the bot to cancel its orders before kill.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Hardening.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/polybot/state
+
+[Install]
+WantedBy=multi-user.target

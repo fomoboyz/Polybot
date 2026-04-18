@@ -1,0 +1,8 @@
+py-clob-client>=0.17.0
+httpx>=0.27
+pydantic>=2.5
+PyYAML>=6.0
+python-dotenv>=1.0
+tenacity>=8.2
+rich>=13.7
+SQLAlchemy>=2.0

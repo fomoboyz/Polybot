@@ -117,6 +117,20 @@ class TunerCfg(BaseModel):
     learning_rate: float = 0.2
 
 
+class WebSocketCfg(BaseModel):
+    enabled: bool = True
+    url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+    ping_interval_sec: PositiveFloat = 10.0
+    max_staleness_sec: PositiveFloat = 15.0  # fall back to REST beyond this
+
+
+class ObservabilityCfg(BaseModel):
+    prometheus_enabled: bool = True
+    prometheus_port: PositiveInt = 9464
+    alert_webhook_url: Optional[str] = None
+    json_logs: bool = False
+
+
 class LoopCfg(BaseModel):
     tick_interval_sec: PositiveInt = 2
     http_timeout_sec: PositiveInt = 10
@@ -135,6 +149,8 @@ class Config(BaseModel):
     research: ResearchCfg = Field(default_factory=ResearchCfg)
     copy_trading: CopyTradingCfg = Field(default_factory=CopyTradingCfg)
     tuner: TunerCfg = Field(default_factory=TunerCfg)
+    websocket: WebSocketCfg = Field(default_factory=WebSocketCfg)
+    observability: ObservabilityCfg = Field(default_factory=ObservabilityCfg)
     loop: LoopCfg = Field(default_factory=LoopCfg)
 
 

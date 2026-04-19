@@ -10,17 +10,9 @@ from pathlib import Path
 
 from .bot import Polybot
 from .config import load_config, load_secrets
+from .observability import configure_logging as _setup_logging
 from .report import render_markdown, run_report
 from .research import ResearchEngine
-
-
-def _setup_logging(level: str) -> None:
-    logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-    )
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
 def _cmd_run(args: argparse.Namespace) -> int:

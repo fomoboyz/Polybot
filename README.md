@@ -52,9 +52,11 @@ trading harness, a 6-hour auto-research loop, and an auto-tuner.
   endpoint + in-memory fill simulator. Tracks the same metrics (volume, fill
   rate, PnL, estimated reward score) against real market moves. No wallet
   required. This is how you free-test the bot for 24h.
-- **6h auto-research** — pulls top wallets (leaderboard), ranks markets by
-  volume + liquidity + reward-eligibility, writes `state/research/*.md` +
-  `latest.json`.
+- **6h auto-research** — pulls top wallets (leaderboard), **classifies each
+  wallet's style** (market_maker / arbitrageur / directional / mixed) from
+  their recent trade tape, ranks markets by volume + liquidity + reward-
+  eligibility, and **auto-derives config recommendations** (e.g. "top wallets
+  are MMs → tighten target spread"). Output: `state/research/*.md` + `latest.json`.
 - **Auto-tuner** — every `evaluation_window_hours`, reads recent fills and
   nudges `target_spread_bps` toward the configured `target_fill_rate`. In
   paper/dry-run mode it can write config.yaml directly; in live mode it only
@@ -62,6 +64,19 @@ trading harness, a 6-hour auto-research loop, and an auto-tuner.
 - **Copy-trading watchlist** — opt-in module mirrors new entries from the
   top-N wallets in the research snapshot, capped at `mirror_size_usd` and
   validated through the same risk manager as everything else.
+
+### Performance & observability (Phase 2)
+
+- **WebSocket feed** — subscribes to `wss://ws-subscriptions-clob.polymarket.com/ws/market`
+  in a background thread. Sub-100ms book updates with automatic reconnect
+  + exponential backoff. REST fallback when feed staleness exceeds threshold.
+- **Prometheus metrics** — served on `:9464` by default. Counters/gauges for
+  volume, PnL, fill rate, resting orders, tick latency, breaker state.
+- **Webhook alerts** — critical events (breaker trips, startup, shutdown)
+  POST to `observability.alert_webhook_url` (Slack/Discord-compatible).
+- **JSON logs** — opt-in structured logging for log aggregation pipelines.
+- **Client-side rate limiting** — token-bucket per endpoint group so we
+  never hit Polymarket's 429s.
 
 ---
 

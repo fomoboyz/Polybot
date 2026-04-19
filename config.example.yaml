@@ -99,6 +99,22 @@ tuner:
   target_fill_rate: 0.3
   learning_rate: 0.2
 
+# ---- WebSocket feed (low-latency book updates) ----
+websocket:
+  enabled: true
+  url: "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+  ping_interval_sec: 10.0
+  # REST fallback kicks in if the WS book is older than this.
+  max_staleness_sec: 15.0
+
+# ---- Observability ----
+observability:
+  prometheus_enabled: true
+  prometheus_port: 9464
+  # Optional webhook for critical events (e.g. Slack/Discord incoming webhook).
+  alert_webhook_url: null
+  json_logs: false
+
 # ---- Loop ----
 loop:
   tick_interval_sec: 2

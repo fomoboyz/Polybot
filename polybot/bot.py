@@ -1,14 +1,15 @@
 """Orchestrator — the main 24/7 loop.
 
 Tick sequence:
-  1. Safety: check kill switch & circuit breaker.
-  2. Scan the market universe (cached, refreshed on interval).
-  3. Fetch live order books; update volatility tracker.
-  4. Paper mode only: drain simulated fills and feed them into risk/state.
-  5. Run each strategy.
-  6. Run copy-trading signal.
-  7. Periodic: research engine + auto-tuner.
-  8. Metrics snapshot.
+  1. Safety: kill switch & circuit breaker.
+  2. Scan universe (cached, refreshed on interval).
+  3. For each market, prefer a WebSocket book if fresh, else fall back to REST.
+  4. Update volatility tracker.
+  5. Paper mode: drain simulated fills into risk/state/executor.
+  6. Run each strategy.
+  7. Copy-trading signal.
+  8. Periodic: research engine + auto-tuner.
+  9. Metrics snapshot (rich + Prometheus).
 """
 
 from __future__ import annotations
@@ -26,7 +27,9 @@ from .executor import OrderExecutor
 from .gamma import GammaClient
 from .metrics import Metrics
 from .models import OrderBook
+from .observability import Alerter, PrometheusRegistry, configure_logging
 from .paper import SimFill
+from .rate_limit import RateLimiter
 from .research import ResearchEngine
 from .risk import RiskManager
 from .scanner import MarketScanner
@@ -39,6 +42,7 @@ from .strategies import (
 )
 from .tuner import AutoTuner
 from .volatility import VolatilityTracker
+from .websocket_feed import WebSocketFeed
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +55,7 @@ class Polybot:
         dry_run: bool = False,
         paper: bool = False,
     ):
+        configure_logging(secrets.log_level, cfg.observability.json_logs)
         self._cfg = cfg
         self._secrets = secrets
         self._dry_run = dry_run
@@ -68,6 +73,11 @@ class Polybot:
             host=secrets.gamma_host,
             timeout_sec=cfg.loop.http_timeout_sec,
         )
+        self._rate = RateLimiter()
+        # Polymarket Gamma: 4000/10s overall, 300/10s on /markets. We stay
+        # conservative to give headroom for scanner refresh + research.
+        self._rate.configure("gamma", capacity=200, refill_per_sec=20)
+
         self._risk = RiskManager(cfg.risk)
         self._executor = OrderExecutor(self._clob, self._risk)
         self._scanner = MarketScanner(
@@ -90,6 +100,18 @@ class Polybot:
         ))
         self._store = Store()
         self._metrics = Metrics(self._store)
+        self._prom = PrometheusRegistry(cfg.observability)
+        self._prom.start()
+        self._alerter = Alerter(cfg.observability)
+
+        self._ws: Optional[WebSocketFeed] = None
+        if cfg.websocket.enabled:
+            self._ws = WebSocketFeed(
+                url=cfg.websocket.url,
+                ping_interval_sec=cfg.websocket.ping_interval_sec,
+            )
+            self._ws.start()
+
         self._research: Optional[ResearchEngine] = (
             ResearchEngine(cfg, secrets) if cfg.research.enabled else None
         )
@@ -108,6 +130,8 @@ class Polybot:
         signal.signal(signal.SIGINT, self._on_signal)
         signal.signal(signal.SIGTERM, self._on_signal)
 
+        self._last_breaker_trip: Optional[str] = None
+
     def _on_signal(self, signum, _frame):
         log.warning("signal %s — shutting down", signum)
         self._shutdown = True
@@ -121,13 +145,17 @@ class Polybot:
             mode,
             [s.name for s in self._strategies],
         )
+        self._alerter.fire("info", f"polybot started mode={mode}")
         try:
             while not self._shutdown:
+                t0 = time.time()
                 try:
                     self._tick()
                 except Exception as e:
                     log.exception("tick error: %s", e)
                     self._breaker.record_error()
+                if self._prom.tick_latency is not None:
+                    self._prom.tick_latency.observe(time.time() - t0)
                 time.sleep(self._cfg.loop.tick_interval_sec)
         finally:
             log.info("cancelling all open orders before exit…")
@@ -137,6 +165,12 @@ class Polybot:
                 self._research.close()
             if self._copy is not None:
                 self._copy.close()
+            if self._ws is not None:
+                self._ws.stop()
+            self._alerter.fire("info", "polybot stopped")
+            self._alerter.close()
+
+    # ---- tick ----
 
     def _tick(self) -> None:
         if self._risk.kill_switch_active():
@@ -146,34 +180,37 @@ class Polybot:
             return
 
         if self._breaker.tripped():
-            log.warning("breaker %s — idling", self._breaker.reason)
+            if self._breaker.reason != self._last_breaker_trip:
+                self._alerter.fire("warning", f"breaker tripped: {self._breaker.reason}")
+                self._last_breaker_trip = self._breaker.reason
             self._executor.cancel_everything()
+            if self._prom.breaker_tripped is not None:
+                self._prom.breaker_tripped.set(1)
             time.sleep(5)
             return
+        if self._prom.breaker_tripped is not None:
+            self._prom.breaker_tripped.set(0)
 
+        self._rate.acquire("gamma")
         markets = self._scanner.active_markets()
         if not markets:
             return
 
-        books: Dict[str, OrderBook] = {}
-        now = time.time()
-        mid_moves_bps: Dict[str, float] = {}
+        # Sync WS subscription list to active universe.
+        if self._ws is not None:
+            self._ws.set_tokens([m.token_id for m in markets])
 
-        for market in markets:
-            try:
-                book = self._clob.get_order_book(market.token_id)
-                self._breaker.record_api(True)
-            except Exception as e:
-                log.debug("book fetch %s failed: %s", market.token_id[:10], e)
-                self._breaker.record_api(False)
-                continue
-            if book and book.midpoint is not None:
-                books[market.token_id] = book
-                self._vol.update(market.token_id, now, book.midpoint)
-                self._breaker.record_book(market.token_id, now)
-                delta = self._vol.midpoint_delta_bps(market.token_id, lookback_sec=60.0)
+        books = self._fetch_books(markets)
+
+        mid_moves_bps: Dict[str, float] = {}
+        now = time.time()
+        for token_id, book in books.items():
+            if book.midpoint is not None:
+                self._vol.update(token_id, now, book.midpoint)
+                self._breaker.record_book(token_id, now)
+                delta = self._vol.midpoint_delta_bps(token_id, lookback_sec=60.0)
                 if delta is not None:
-                    mid_moves_bps[market.token_id] = delta
+                    mid_moves_bps[token_id] = delta
 
         breaker_trip = self._breaker.check(
             active_tokens=[m.token_id for m in markets],
@@ -183,8 +220,6 @@ class Polybot:
             self._executor.cancel_everything()
             return
 
-        # Drain paper fills BEFORE strategies decide — strategies read current
-        # inventory from risk.
         if self._paper:
             for fill in self._clob.drain_paper_fills(books):
                 self._on_paper_fill(fill)
@@ -215,11 +250,32 @@ class Polybot:
             except Exception as e:
                 log.warning("tuner error: %s", e)
 
-        self._metrics.tick(
-            self._risk,
-            resting_orders=self._executor.resting_count(),
-            n_markets=len(books),
-        )
+        self._publish_metrics(len(books))
+
+    # ---- helpers ----
+
+    def _fetch_books(self, markets) -> Dict[str, OrderBook]:
+        """Prefer WebSocket feed, fall back to REST when ws is stale or missing."""
+        books: Dict[str, OrderBook] = {}
+        max_age_ms = self._cfg.websocket.max_staleness_sec * 1000
+        now_ms = time.time() * 1000
+        for market in markets:
+            book = None
+            if self._ws is not None:
+                ws_book = self._ws.get(market.token_id)
+                if ws_book is not None and (now_ms - ws_book.timestamp_ms) < max_age_ms:
+                    book = ws_book
+            if book is None:
+                try:
+                    book = self._clob.get_order_book(market.token_id)
+                    self._breaker.record_api(True)
+                except Exception as e:
+                    log.debug("book fetch %s failed: %s", market.token_id[:10], e)
+                    self._breaker.record_api(False)
+                    continue
+            if book and book.midpoint is not None:
+                books[market.token_id] = book
+        return books
 
     def _on_paper_fill(self, fill: SimFill) -> None:
         self._risk.on_fill(fill.token_id, fill.side, fill.shares, fill.price)
@@ -231,5 +287,21 @@ class Polybot:
             shares=fill.shares,
             filled_at=fill.filled_at,
         )
-        # Clear the resting slot so the market-maker requotes.
         self._executor.mark_filled(fill.order_id, fill.token_id, fill.side)
+        if self._prom.orders_filled is not None:
+            self._prom.orders_filled.labels(side=fill.side).inc()
+        if self._prom.volume_usd is not None:
+            self._prom.volume_usd.inc(fill.price * fill.shares)
+
+    def _publish_metrics(self, n_books: int) -> None:
+        self._metrics.tick(
+            self._risk,
+            resting_orders=self._executor.resting_count(),
+            n_markets=n_books,
+        )
+        if self._prom.pnl_usd is not None:
+            self._prom.pnl_usd.set(self._risk.state.realized_pnl_today)
+        if self._prom.resting_orders is not None:
+            self._prom.resting_orders.set(self._executor.resting_count())
+        if self._prom.active_markets is not None:
+            self._prom.active_markets.set(n_books)

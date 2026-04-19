@@ -52,12 +52,34 @@ class MarketSummary:
 
 
 @dataclass
+class TraderStyle:
+    address: str
+    style: str  # "market_maker" | "directional" | "arbitrageur" | "mixed"
+    pnl_usd: float
+    avg_hold_sec: Optional[float] = None
+    taker_ratio: Optional[float] = None  # fraction of taker fills vs maker
+    markets_traded: int = 0
+    reasoning: str = ""
+
+
+@dataclass
+class StrategyRecommendation:
+    lever: str           # e.g. "market_maker.target_spread_bps"
+    current: Any
+    recommended: Any
+    confidence: float    # 0..1
+    justification: str
+
+
+@dataclass
 class ResearchSnapshot:
     generated_at: float
     top_wallets: List[WalletSummary] = field(default_factory=list)
     top_markets_by_volume: List[MarketSummary] = field(default_factory=list)
     top_markets_by_liquidity: List[MarketSummary] = field(default_factory=list)
     reward_eligible_markets: List[MarketSummary] = field(default_factory=list)
+    trader_styles: List[TraderStyle] = field(default_factory=list)
+    recommendations: List[StrategyRecommendation] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
 
 
@@ -99,8 +121,99 @@ class ResearchEngine:
             log.warning(msg)
             snap.notes.append(msg)
 
+        try:
+            snap.trader_styles = self._profile_top_wallets(snap.top_wallets[:15])
+        except Exception as e:
+            log.debug("trader profiling: %s", e)
+
+        snap.recommendations = self._derive_recommendations(snap)
+
         self._persist(snap)
         return snap
+
+    # ---- trader profiling ----
+
+    def _profile_top_wallets(self, wallets: List[WalletSummary]) -> List[TraderStyle]:
+        """For each top wallet, pull recent trades and classify their style."""
+        out: List[TraderStyle] = []
+        for w in wallets:
+            trades = self._wallet_trades(w.address)
+            if not trades:
+                out.append(TraderStyle(
+                    address=w.address, style="unknown", pnl_usd=w.pnl_usd,
+                    reasoning="no-trade-data",
+                ))
+                continue
+            style, hold, taker_ratio, markets = classify_trader(trades)
+            out.append(TraderStyle(
+                address=w.address, style=style, pnl_usd=w.pnl_usd,
+                avg_hold_sec=hold, taker_ratio=taker_ratio, markets_traded=markets,
+                reasoning=(
+                    f"taker_ratio={taker_ratio:.2f} hold={hold or 0:.0f}s "
+                    f"n_markets={markets}"
+                ),
+            ))
+        return out
+
+    def _wallet_trades(self, address: str) -> List[dict]:
+        for url in (
+            f"{self._secrets.data_host}/trades",
+            f"{self._secrets.gamma_host}/trades",
+        ):
+            try:
+                r = self._client.get(url, params={"user": address, "limit": 100})
+                if r.status_code == 404:
+                    continue
+                r.raise_for_status()
+                raw = r.json()
+                entries = raw.get("data") if isinstance(raw, dict) else raw
+                if isinstance(entries, list):
+                    return entries
+            except Exception:
+                continue
+        return []
+
+    # ---- recommendations ----
+
+    def _derive_recommendations(self, snap: ResearchSnapshot) -> List[StrategyRecommendation]:
+        recs: List[StrategyRecommendation] = []
+        mm = self._cfg.market_maker
+        if snap.trader_styles:
+            makers = [t for t in snap.trader_styles if t.style == "market_maker"]
+            if makers and len(makers) / max(len(snap.trader_styles), 1) > 0.5:
+                # Top earners are MMs — suggest we tighten spread further.
+                recs.append(StrategyRecommendation(
+                    lever="market_maker.target_spread_bps",
+                    current=mm.target_spread_bps,
+                    recommended=max(5.0, mm.target_spread_bps * 0.8),
+                    confidence=0.5,
+                    justification=(
+                        f"{len(makers)}/{len(snap.trader_styles)} top wallets are "
+                        f"market-makers; tightening spread may compete for LP rewards."
+                    ),
+                ))
+            if any(t.style == "arbitrageur" for t in snap.trader_styles):
+                recs.append(StrategyRecommendation(
+                    lever="arbitrage.enabled",
+                    current=self._cfg.arbitrage.enabled,
+                    recommended=True,
+                    confidence=0.4,
+                    justification="Top wallets include arbitrageurs — ensure arb engine is on.",
+                ))
+
+        if snap.reward_eligible_markets and len(snap.reward_eligible_markets) > 10:
+            recs.append(StrategyRecommendation(
+                lever="scanner.max_concurrent_markets",
+                current=self._cfg.scanner.max_concurrent_markets,
+                recommended=min(50, max(self._cfg.scanner.max_concurrent_markets, 25)),
+                confidence=0.3,
+                justification=(
+                    f"{len(snap.reward_eligible_markets)} reward-eligible markets "
+                    "available — consider scaling concurrent markets."
+                ),
+            ))
+
+        return recs
 
     # ---- fetchers ----
 
@@ -199,6 +312,46 @@ class ResearchEngine:
         self._client.close()
 
 
+def classify_trader(trades: List[dict]) -> tuple:
+    """Return (style, avg_hold_sec, taker_ratio, n_markets).
+
+    Heuristic:
+      - taker_ratio < 0.3 + many markets → market_maker
+      - short holding + many markets + near-pair trades → arbitrageur
+      - else directional / mixed
+    """
+    if not trades:
+        return ("unknown", None, None, 0)
+    sides_taker = [t for t in trades if str(t.get("side", "")).lower() == "taker" or t.get("is_taker")]
+    taker_ratio = len(sides_taker) / max(len(trades), 1)
+
+    markets = {t.get("tokenId") or t.get("asset") or t.get("market") for t in trades}
+    markets.discard(None)
+    n_markets = len(markets)
+
+    # Extract timestamps (may be missing).
+    ts_list = []
+    for t in trades:
+        ts = t.get("timestamp") or t.get("createdAt") or t.get("blockTime")
+        try:
+            ts_list.append(float(ts))
+        except (TypeError, ValueError):
+            continue
+    hold = None
+    if len(ts_list) >= 2:
+        ts_list.sort()
+        diffs = [ts_list[i + 1] - ts_list[i] for i in range(len(ts_list) - 1)]
+        hold = sum(diffs) / len(diffs)
+
+    if taker_ratio < 0.3 and n_markets >= 5:
+        return ("market_maker", hold, taker_ratio, n_markets)
+    if hold is not None and hold < 60 and n_markets >= 3 and taker_ratio > 0.6:
+        return ("arbitrageur", hold, taker_ratio, n_markets)
+    if taker_ratio > 0.7 and n_markets <= 3:
+        return ("directional", hold, taker_ratio, n_markets)
+    return ("mixed", hold, taker_ratio, n_markets)
+
+
 def _extract_token_ids(m: Dict[str, Any]) -> List[str]:
     ids = m.get("clobTokenIds") or m.get("clob_token_ids") or []
     if isinstance(ids, str):
@@ -231,6 +384,8 @@ def _snapshot_to_jsonable(snap: ResearchSnapshot) -> dict:
         "top_markets_by_volume": [asdict(m) for m in snap.top_markets_by_volume],
         "top_markets_by_liquidity": [asdict(m) for m in snap.top_markets_by_liquidity],
         "reward_eligible_markets": [asdict(m) for m in snap.reward_eligible_markets],
+        "trader_styles": [asdict(t) for t in snap.trader_styles],
+        "recommendations": [asdict(r) for r in snap.recommendations],
         "notes": snap.notes,
     }
 
@@ -274,6 +429,27 @@ def _render_markdown(snap: ResearchSnapshot) -> str:
             lines.append(
                 f"| {i} | {q} | ${m.liquidity_usd:,.0f} | "
                 f"${m.volume_24h_usd:,.0f} |"
+            )
+        lines.append("")
+    if snap.trader_styles:
+        lines.append("## Trader style profiling")
+        lines.append("| Wallet | Style | PnL | Hold(s) | Taker% | Markets |")
+        lines.append("|---|---|---|---|---|---|")
+        for t in snap.trader_styles[:15]:
+            lines.append(
+                f"| `{t.address[:10]}…` | {t.style} | ${t.pnl_usd:,.0f} | "
+                f"{int(t.avg_hold_sec or 0)} | "
+                f"{(t.taker_ratio or 0) * 100:.0f}% | {t.markets_traded} |"
+            )
+        lines.append("")
+    if snap.recommendations:
+        lines.append("## Recommendations (auto-derived)")
+        lines.append("| Lever | Current | → | Recommended | Conf | Why |")
+        lines.append("|---|---|---|---|---|---|")
+        for r in snap.recommendations:
+            lines.append(
+                f"| `{r.lever}` | {r.current} | → | {r.recommended} | "
+                f"{r.confidence:.0%} | {r.justification} |"
             )
         lines.append("")
     return "\n".join(lines)

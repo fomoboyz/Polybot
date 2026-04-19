@@ -76,6 +76,15 @@ class OrderExecutor:
         for key in list(self._resting.keys()):
             self._cancel(key)
 
+    def mark_filled(self, order_id: str, token_id: str, side: str) -> None:
+        """Clear a resting slot after an external fill (paper or websocket)."""
+        key = (token_id, side)
+        existing = self._resting.get(key)
+        if existing is None or existing.placed.order_id != order_id:
+            return
+        self._risk.on_unrest(existing.placed.quote)
+        del self._resting[key]
+
     def resting_count(self) -> int:
         return len(self._resting)
 

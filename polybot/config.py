@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import yaml
 from dotenv import load_dotenv
@@ -17,6 +17,7 @@ class Secrets(BaseModel):
     signature_type: int = 1
     clob_host: str = "https://clob.polymarket.com"
     gamma_host: str = "https://gamma-api.polymarket.com"
+    data_host: str = "https://data-api.polymarket.com"
     log_level: str = "INFO"
 
 
@@ -33,6 +34,7 @@ class RiskCfg(BaseModel):
     max_notional_usd: PositiveFloat = 100.0
     max_per_market_usd: PositiveFloat = 20.0
     max_daily_loss_usd: PositiveFloat = 20.0
+    max_drawdown_from_peak_usd: PositiveFloat = 30.0
     max_inventory_skew: PositiveFloat = 200.0
     min_order_usd: PositiveFloat = 5.0
 
@@ -46,6 +48,13 @@ class MarketMakerCfg(BaseModel):
     quote_size_usd: PositiveFloat = 10.0
     join_if_wider_bps: PositiveFloat = 30
     tick_size: float = 0.001
+    # Inventory-aware (Avellaneda-Stoikov) pricing.
+    use_inventory_skew: bool = True
+    inventory_risk_aversion: float = 0.05  # γ
+    max_skew_shift: float = 0.02  # hard cap on reservation-price shift
+    # Adaptive-spread (widen when σ is high).
+    use_adaptive_spread: bool = True
+    sigma_to_spread_multiplier: float = 8.0
 
 
 class ArbitrageCfg(BaseModel):
@@ -67,6 +76,47 @@ class CrossMarketArbCfg(BaseModel):
     enabled: bool = False
 
 
+class BreakerCfg(BaseModel):
+    enabled: bool = True
+    max_errors_per_minute: PositiveInt = 30
+    max_feed_age_sec: PositiveFloat = 120.0
+    crash_bps_per_min: PositiveFloat = 500.0
+    crash_market_share: float = 0.3
+    max_api_failure_rate: float = 0.5
+    cooldown_sec: PositiveInt = 60
+
+
+class VolatilityCfg(BaseModel):
+    window_sec: PositiveInt = 300
+    min_samples: PositiveInt = 8
+
+
+class ResearchCfg(BaseModel):
+    enabled: bool = True
+    interval_hours: PositiveFloat = 6.0
+    leaderboard_window: str = "7d"  # 24h | 7d | 30d | all
+    top_wallets: PositiveInt = 50
+    report_dir: str = "state/research"
+    auto_apply: bool = False  # if True the tuner writes config.yaml changes
+
+
+class CopyTradingCfg(BaseModel):
+    enabled: bool = False
+    max_wallets_to_follow: PositiveInt = 5
+    mirror_size_usd: PositiveFloat = 5.0
+    min_wallet_pnl_usd: PositiveFloat = 10000.0
+    allow_markets: List[str] = Field(default_factory=list)  # empty = any
+    require_same_side: bool = True
+
+
+class TunerCfg(BaseModel):
+    enabled: bool = False
+    evaluation_window_hours: PositiveFloat = 24.0
+    target_fill_rate: float = 0.3
+    # How aggressively to move parameters each evaluation (0..1).
+    learning_rate: float = 0.2
+
+
 class LoopCfg(BaseModel):
     tick_interval_sec: PositiveInt = 2
     http_timeout_sec: PositiveInt = 10
@@ -80,24 +130,30 @@ class Config(BaseModel):
     arbitrage: ArbitrageCfg = Field(default_factory=ArbitrageCfg)
     mean_reversion: MeanReversionCfg = Field(default_factory=MeanReversionCfg)
     cross_market_arb: CrossMarketArbCfg = Field(default_factory=CrossMarketArbCfg)
+    breaker: BreakerCfg = Field(default_factory=BreakerCfg)
+    volatility: VolatilityCfg = Field(default_factory=VolatilityCfg)
+    research: ResearchCfg = Field(default_factory=ResearchCfg)
+    copy_trading: CopyTradingCfg = Field(default_factory=CopyTradingCfg)
+    tuner: TunerCfg = Field(default_factory=TunerCfg)
     loop: LoopCfg = Field(default_factory=LoopCfg)
 
 
-def load_secrets() -> Secrets:
+def load_secrets(require_wallet: bool = True) -> Secrets:
     load_dotenv()
     pk = os.getenv("PK_PRIVATE_KEY", "").strip()
     funder = os.getenv("PK_FUNDER", "").strip()
-    if not pk or not funder:
+    if require_wallet and (not pk or not funder):
         raise RuntimeError(
             "PK_PRIVATE_KEY and PK_FUNDER must be set in the environment "
             "(see .env.example)."
         )
     return Secrets(
-        private_key=pk,
-        funder=funder,
+        private_key=pk or "0x" + "0" * 64,
+        funder=funder or "0x" + "0" * 40,
         signature_type=int(os.getenv("PK_SIGNATURE_TYPE", "1")),
         clob_host=os.getenv("CLOB_HOST", "https://clob.polymarket.com"),
         gamma_host=os.getenv("GAMMA_HOST", "https://gamma-api.polymarket.com"),
+        data_host=os.getenv("DATA_HOST", "https://data-api.polymarket.com"),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
     )
 
@@ -110,3 +166,11 @@ def load_config(path: Optional[str] = None) -> Config:
     with p.open() as f:
         raw = yaml.safe_load(f) or {}
     return Config(**raw)
+
+
+def write_config(cfg: Config, path: Optional[str] = None) -> None:
+    path = path or os.getenv("POLYBOT_CONFIG", "config.yaml")
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("w") as f:
+        yaml.safe_dump(cfg.model_dump(mode="json"), f, sort_keys=False)

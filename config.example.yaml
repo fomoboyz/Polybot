@@ -2,68 +2,50 @@
 
 # ---- Market discovery ----
 scanner:
-  # Only consider markets with at least this much reported liquidity (USD).
   min_liquidity_usd: 5000
-  # Only consider markets with at least this much 24h volume (USD).
   min_volume_24h_usd: 2000
-  # Require reward-eligible markets only (LP rewards > 0 in gamma meta).
   rewards_only: true
-  # Max number of markets to trade simultaneously. Each consumes quote slots.
   max_concurrent_markets: 25
-  # Refresh scanner every N seconds.
   refresh_interval_sec: 60
-  # Exclude markets resolving within this many hours (pin/resolution risk).
   exclude_closing_within_hours: 2
 
-# ---- Risk controls ----
-# These are hard ceilings. Every new order is validated against them.
+# ---- Risk controls (hard ceilings — every new order is validated) ----
 risk:
-  # Total USD notional across all resting + filled positions.
   max_notional_usd: 100.0
-  # Per-token-id cap.
   max_per_market_usd: 20.0
-  # Kill-switch. If realized PnL today drops below -this, halt all strategies
-  # until the kill file at state/KILL is manually removed.
   max_daily_loss_usd: 20.0
-  # Per-market inventory skew cap: |long − short| in shares. We stop adding to
-  # the heavier side once breached.
+  # Kill-switch if lifetime PnL falls this far below its peak.
+  max_drawdown_from_peak_usd: 30.0
   max_inventory_skew: 200.0
-  # Reject orders smaller than this USD size (Polymarket min is $1, but below
-  # $5 is rarely worth the gas-equivalent overhead).
   min_order_usd: 5.0
 
 # ---- Market maker (primary engine) ----
 market_maker:
   enabled: true
-  # Target half-spread in basis points (1bp = 0.0001 USD on a $1-sum market).
-  # 50 bps = 0.005 = half a cent on each side.
   target_spread_bps: 50
-  # Never post a quote whose distance from midpoint is below this. Hard floor.
   min_edge_over_mid_bps: 10
-  # Requote when midpoint drifts more than this from the mid at time of post.
   requote_drift_bps: 25
-  # How often to refresh resting quotes even if nothing moved (sec).
   requote_interval_sec: 30
-  # USD size per side per market.
   quote_size_usd: 10.0
-  # Top-of-book tightening: if we're 2nd-best and the winner's spread is
-  # wider than `join_if_wider_bps`, step inside by 1 tick.
   join_if_wider_bps: 30
-  # Minimum tick size (price increment). Polymarket tick is usually 0.001.
   tick_size: 0.001
+  # Avellaneda-Stoikov inventory pricing. Shifts the reservation price by
+  # -γ × inventory × σ². When long both sides move down; when short, up.
+  use_inventory_skew: true
+  inventory_risk_aversion: 0.05
+  max_skew_shift: 0.02
+  # Widen spread on volatile markets. adaptive_half = σ × multiplier.
+  use_adaptive_spread: true
+  sigma_to_spread_multiplier: 8.0
 
 # ---- Intra-market YES+NO arbitrage ----
 arbitrage:
   enabled: true
-  # Min profit after fees, in bps of notional. 2% taker fee + slippage buffer
-  # means you need at least ~300 bps raw gap for positive EV.
   min_profit_bps: 300
-  # Max USD to deploy per arb leg.
   max_size_per_arb_usd: 25.0
-  # Taker fee assumption for EV computation.
   taker_fee_bps: 200
 
-# ---- Mean-reversion (disabled by default — read code first) ----
+# ---- Mean-reversion (opt-in) ----
 mean_reversion:
   enabled: false
   window_sec: 300
@@ -71,11 +53,53 @@ mean_reversion:
   position_size_usd: 5.0
   max_hold_sec: 1800
 
-# ---- Cross-market arbitrage (disabled by default) ----
+# ---- Cross-market arbitrage (opt-in) ----
 cross_market_arb:
   enabled: false
 
-# ---- Loop & networking ----
+# ---- Circuit breakers ----
+breaker:
+  enabled: true
+  max_errors_per_minute: 30
+  max_feed_age_sec: 120.0
+  # If >30% of markets move >500bps in a minute, pause.
+  crash_bps_per_min: 500.0
+  crash_market_share: 0.3
+  max_api_failure_rate: 0.5
+  cooldown_sec: 60
+
+# ---- Volatility tracker ----
+volatility:
+  window_sec: 300
+  min_samples: 8
+
+# ---- Auto-research (every N hours) ----
+research:
+  enabled: true
+  interval_hours: 6
+  leaderboard_window: "7d"
+  top_wallets: 50
+  report_dir: state/research
+  # If true AND we're NOT in live mode, the tuner may write config.yaml.
+  auto_apply: false
+
+# ---- Copy trading (opt-in, gated) ----
+copy_trading:
+  enabled: false
+  max_wallets_to_follow: 5
+  mirror_size_usd: 5.0
+  min_wallet_pnl_usd: 10000.0
+  allow_markets: []  # empty = mirror any market
+  require_same_side: true
+
+# ---- Auto-tuner ----
+tuner:
+  enabled: false
+  evaluation_window_hours: 24
+  target_fill_rate: 0.3
+  learning_rate: 0.2
+
+# ---- Loop ----
 loop:
   tick_interval_sec: 2
   http_timeout_sec: 10

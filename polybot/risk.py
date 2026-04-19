@@ -24,6 +24,8 @@ KILL_FILE = Path("state/KILL")
 @dataclass
 class RiskState:
     realized_pnl_today: float = 0.0
+    realized_pnl_lifetime: float = 0.0
+    peak_pnl_lifetime: float = 0.0
     unrealized_pnl: float = 0.0
     resting_notional_usd: float = 0.0
     positions_notional_usd: float = 0.0
@@ -72,6 +74,13 @@ class RiskManager:
                 f"-{self.cfg.max_daily_loss_usd}"
             )
             return "daily-loss-breached"
+        drawdown = self.state.peak_pnl_lifetime - self.state.realized_pnl_lifetime
+        if drawdown >= self.cfg.max_drawdown_from_peak_usd:
+            self._trip_kill_switch(
+                f"drawdown-from-peak {drawdown:.2f} >= "
+                f"{self.cfg.max_drawdown_from_peak_usd}"
+            )
+            return "drawdown-breached"
         notional = quote.price * quote.size
         if notional < self.cfg.min_order_usd:
             return f"below-min-order-{notional:.2f}<{self.cfg.min_order_usd}"
@@ -126,6 +135,9 @@ class RiskManager:
         pos.apply_fill(side, shares, price)  # type: ignore[arg-type]
         delta = pos.realized_pnl - pre_pnl
         self.state.realized_pnl_today += delta
+        self.state.realized_pnl_lifetime += delta
+        if self.state.realized_pnl_lifetime > self.state.peak_pnl_lifetime:
+            self.state.peak_pnl_lifetime = self.state.realized_pnl_lifetime
         # Re-value positions — approximate marked at last fill price.
         self._revalue_positions()
 

@@ -67,6 +67,7 @@ class Quote:
     side: Side
     price: float
     size: float  # in shares (size * price = USD)
+    slot: int = 0  # ladder level — 0 = tightest, higher = wider
 
 
 @dataclass

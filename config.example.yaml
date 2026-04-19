@@ -99,6 +99,41 @@ tuner:
   target_fill_rate: 0.3
   learning_rate: 0.2
 
+# ---- Laddered quotes ----
+# Post multiple levels per side instead of one. Quadratic reward scoring
+# rewards density near the mid; a ladder concentrates more orders there.
+ladder:
+  enabled: true
+  levels: 3
+  step_bps: 20
+  size_decay: 0.7
+
+# ---- Capital allocator (Kelly-lite) ----
+# Sizes each market proportional to its expected reward score × liquidity.
+allocator:
+  enabled: true
+  min_per_market_usd: 5.0
+
+# ---- Book history recorder (enables backtesting) ----
+history:
+  enabled: true
+  snapshot_interval_sec: 15
+  retention_hours: 72
+  db_path: state/book_history.sqlite
+
+# ---- Position reconciler ----
+reconciler:
+  enabled: true
+  interval_sec: 120
+  auto_correct: true
+
+# ---- Health endpoint (HTTP) ----
+health:
+  enabled: true
+  port: 8080
+  host: "0.0.0.0"
+  max_tick_age_sec: 30
+
 # ---- WebSocket feed (low-latency book updates) ----
 websocket:
   enabled: true

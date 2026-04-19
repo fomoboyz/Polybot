@@ -78,6 +78,27 @@ trading harness, a 6-hour auto-research loop, and an auto-tuner.
 - **Client-side rate limiting** — token-bucket per endpoint group so we
   never hit Polymarket's 429s.
 
+### Depth, allocation & replay (Phase 3)
+
+- **Laddered quotes** — instead of one bid/ask pair, the market maker posts
+  N levels on each side with geometrically decaying size. Quadratic reward
+  scoring prefers density near the midpoint — a ladder dominates a single
+  wide quote of the same total size.
+- **Kelly-lite capital allocator** — sizes each market proportional to its
+  expected reward × liquidity, clamped by per-market risk limits. No more
+  flat `quote_size_usd` across unequal markets.
+- **Position reconciler** — every 2 minutes, compares our internal inventory
+  ledger against the CLOB's reported state. Discrepancies (from missed fills,
+  disconnect races, or manual side-trades) are logged and optionally
+  auto-corrected.
+- **HTTP health endpoint** — `/health`, `/ready`, `/status` on `:8080` for
+  systemd watchdog, K8s probes, or any uptime monitor. Reports breaker /
+  kill-switch / WS staleness state.
+- **Book history recorder + backtester** — captures top-of-book snapshots
+  to SQLite every 15s (with 72h retention). `python -m polybot backtest
+  --hours 12 --target-spread-bps 40` replays them deterministically against
+  alternate configs, so parameter sweeps are reproducible.
+
 ---
 
 ## Architecture
@@ -158,6 +179,19 @@ When the bot is running it does this automatically every
 # Fund Polygon-side proxy wallet with USDC.e, fill in .env, then:
 python -m polybot run
 ```
+
+### Backtest a parameter change
+
+After a few hours of `--paper` (or live) the history recorder has enough book
+snapshots to backtest alternate parameters:
+
+```bash
+python -m polybot backtest --hours 6 --target-spread-bps 40
+python -m polybot backtest --hours 6 --target-spread-bps 80
+```
+
+Both runs replay the same snapshots, so the volume/PnL delta reflects
+parameter quality — not market noise.
 
 ### 6. 24/7 deployment
 

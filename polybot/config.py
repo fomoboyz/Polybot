@@ -117,6 +117,38 @@ class TunerCfg(BaseModel):
     learning_rate: float = 0.2
 
 
+class LadderCfg(BaseModel):
+    enabled: bool = True
+    levels: PositiveInt = 3
+    step_bps: PositiveFloat = 20
+    size_decay: float = 0.7  # each subsequent level carries this fraction
+
+
+class AllocatorCfg(BaseModel):
+    enabled: bool = True
+    min_per_market_usd: PositiveFloat = 5.0
+
+
+class HistoryCfg(BaseModel):
+    enabled: bool = True
+    snapshot_interval_sec: PositiveFloat = 15.0
+    retention_hours: PositiveFloat = 72.0
+    db_path: str = "state/book_history.sqlite"
+
+
+class ReconcilerCfg(BaseModel):
+    enabled: bool = True
+    interval_sec: PositiveFloat = 120.0
+    auto_correct: bool = True
+
+
+class HealthCfg(BaseModel):
+    enabled: bool = True
+    port: PositiveInt = 8080
+    host: str = "0.0.0.0"
+    max_tick_age_sec: PositiveFloat = 30.0
+
+
 class WebSocketCfg(BaseModel):
     enabled: bool = True
     url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
@@ -149,6 +181,11 @@ class Config(BaseModel):
     research: ResearchCfg = Field(default_factory=ResearchCfg)
     copy_trading: CopyTradingCfg = Field(default_factory=CopyTradingCfg)
     tuner: TunerCfg = Field(default_factory=TunerCfg)
+    ladder: LadderCfg = Field(default_factory=LadderCfg)
+    allocator: AllocatorCfg = Field(default_factory=AllocatorCfg)
+    history: HistoryCfg = Field(default_factory=HistoryCfg)
+    reconciler: ReconcilerCfg = Field(default_factory=ReconcilerCfg)
+    health: HealthCfg = Field(default_factory=HealthCfg)
     websocket: WebSocketCfg = Field(default_factory=WebSocketCfg)
     observability: ObservabilityCfg = Field(default_factory=ObservabilityCfg)
     loop: LoopCfg = Field(default_factory=LoopCfg)

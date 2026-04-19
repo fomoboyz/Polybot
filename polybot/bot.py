@@ -25,11 +25,14 @@ from .config import Config, Secrets
 from .copy_trading import CopyTrader
 from .executor import OrderExecutor
 from .gamma import GammaClient
+from .health import HealthServer, HealthState
+from .history import HistoryRecorder
 from .metrics import Metrics
 from .models import OrderBook
 from .observability import Alerter, PrometheusRegistry, configure_logging
 from .paper import SimFill
 from .rate_limit import RateLimiter
+from .reconciler import Reconciler
 from .research import ResearchEngine
 from .risk import RiskManager
 from .scanner import MarketScanner
@@ -120,9 +123,25 @@ class Polybot:
             if cfg.copy_trading.enabled else None
         )
         self._tuner = AutoTuner(cfg, live=not (dry_run or paper))
+        self._reconciler = Reconciler(cfg.reconciler, self._clob, self._risk)
+        self._recorder = HistoryRecorder(cfg.history) if cfg.history.enabled else None
+
+        self._health = HealthState(max_tick_age_sec=cfg.health.max_tick_age_sec)
+        self._health.register_provider(self._health_snapshot)
+        self._health_server: Optional[HealthServer] = None
+        if cfg.health.enabled:
+            self._health_server = HealthServer(
+                self._health, port=cfg.health.port, host=cfg.health.host,
+            )
+            self._health_server.start()
 
         self._strategies: List[Strategy] = [
-            MarketMakerStrategy(cfg.market_maker, self._executor, self._risk, self._vol),
+            MarketMakerStrategy(
+                cfg.market_maker, self._executor, self._risk, self._vol,
+                ladder_cfg=cfg.ladder,
+                allocator_cfg=cfg.allocator,
+                risk_cfg=cfg.risk,
+            ),
             ArbitrageStrategy(cfg.arbitrage, self._clob, self._risk),
             MeanReversionStrategy(cfg.mean_reversion, self._clob, self._risk),
         ]
@@ -167,6 +186,8 @@ class Polybot:
                 self._copy.close()
             if self._ws is not None:
                 self._ws.stop()
+            if self._health_server is not None:
+                self._health_server.stop()
             self._alerter.fire("info", "polybot stopped")
             self._alerter.close()
 
@@ -250,7 +271,20 @@ class Polybot:
             except Exception as e:
                 log.warning("tuner error: %s", e)
 
+        if self._reconciler.due():
+            try:
+                self._reconciler.run()
+            except Exception as e:
+                log.warning("reconciler error: %s", e)
+
+        if self._recorder is not None:
+            try:
+                self._recorder.record(books)
+            except Exception as e:
+                log.debug("history recorder error: %s", e)
+
         self._publish_metrics(len(books))
+        self._health.mark_tick()
 
     # ---- helpers ----
 
@@ -292,6 +326,17 @@ class Polybot:
             self._prom.orders_filled.labels(side=fill.side).inc()
         if self._prom.volume_usd is not None:
             self._prom.volume_usd.inc(fill.price * fill.shares)
+
+    def _health_snapshot(self) -> dict:
+        snap = self._risk.snapshot()
+        snap["breaker_tripped"] = self._breaker.tripped()
+        snap["breaker_reason"] = self._breaker.reason
+        if self._ws is not None:
+            snap["ws_connected"] = self._ws.connected
+            snap["ws_disconnects"] = self._ws.disconnect_count
+            age = self._ws.age_sec()
+            snap["ws_last_msg_age_sec"] = round(age, 2) if age is not None else None
+        return snap
 
     def _publish_metrics(self, n_books: int) -> None:
         self._metrics.tick(

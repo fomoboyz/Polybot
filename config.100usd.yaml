@@ -1,0 +1,133 @@
+# Polybot preset tuned for a $100 bankroll over a 7-day trial.
+#
+# Design philosophy:
+#   - Capital preservation > reward farming. $100 against $100k+ MMs means
+#     LP rewards are a bonus, not the engine. Goal is to generate volume
+#     from maker fills near the mid without bleeding from adverse selection.
+#   - Hard stops are tight: max daily loss $8, max drawdown-from-peak $12.
+#   - Fewer concurrent markets, smaller quotes, reward-eligible only.
+#   - Ladders OFF initially (simpler fills with small capital). Flip on
+#     after Day 3 if PnL is positive.
+#   - Research + tuner ON so the bot can nudge itself toward the fill-rate
+#     target that matches the 7-day goal.
+#
+# Use with:  POLYBOT_CONFIG=config.100usd.yaml python -m polybot
+
+scanner:
+  min_liquidity_usd: 10000        # only deep markets — $100 can't afford adverse-selection in thin ones
+  min_volume_24h_usd: 5000
+  rewards_only: true              # no point making markets where we don't earn rewards
+  max_concurrent_markets: 6       # ~$15 effective per market gives real depth
+  refresh_interval_sec: 90
+  exclude_closing_within_hours: 6 # avoid resolution edge cases
+
+risk:
+  max_notional_usd: 80            # keep $20 buffer from $100 deposit
+  max_per_market_usd: 15
+  max_daily_loss_usd: 8           # -8% daily cap → kill switch
+  max_drawdown_from_peak_usd: 12  # -12% from peak → kill switch
+  max_inventory_skew: 50          # tight — prevent ladders of longs on same side
+  min_order_usd: 5
+
+market_maker:
+  enabled: true
+  target_spread_bps: 40           # a bit tighter than default to fight for fills
+  min_edge_over_mid_bps: 15       # firm floor so we don't get picked off on quiet markets
+  requote_drift_bps: 20           # requote aggressively
+  requote_interval_sec: 45
+  quote_size_usd: 6               # just above min order
+  join_if_wider_bps: 40
+  tick_size: 0.001
+  # Inventory-aware pricing — critical at this size; one bad fill ~= a whole
+  # day's rewards.
+  use_inventory_skew: true
+  inventory_risk_aversion: 0.15
+  max_skew_shift: 0.02
+  use_adaptive_spread: true
+  sigma_to_spread_multiplier: 10.0
+
+ladder:
+  enabled: false                  # flip to true after Day 3 if PnL positive
+  levels: 2
+  step_bps: 25
+  size_decay: 0.6
+
+allocator:
+  enabled: true
+  min_per_market_usd: 5
+
+arbitrage:
+  enabled: true
+  min_profit_bps: 350             # extra margin over 200bps fee for small size
+  max_size_per_arb_usd: 20
+  taker_fee_bps: 200
+
+mean_reversion:
+  enabled: false                  # too risky at $100
+
+cross_market_arb:
+  enabled: false
+
+breaker:
+  enabled: true
+  max_errors_per_minute: 20
+  max_feed_age_sec: 60            # aggressive — better to pause than quote stale
+  crash_bps_per_min: 400
+  crash_market_share: 0.25
+  max_api_failure_rate: 0.4
+  cooldown_sec: 90
+
+volatility:
+  window_sec: 300
+  min_samples: 8
+
+history:
+  enabled: true                   # records every 15s — powers daily backtests
+  snapshot_interval_sec: 15
+  retention_hours: 168            # full week
+  db_path: state/book_history.sqlite
+
+reconciler:
+  enabled: true
+  interval_sec: 180
+  auto_correct: true
+
+health:
+  enabled: true
+  port: 8080
+  host: "0.0.0.0"
+  max_tick_age_sec: 45
+
+research:
+  enabled: true
+  interval_hours: 6
+  leaderboard_window: "7d"
+  top_wallets: 50
+  report_dir: state/research
+  auto_apply: false               # in live mode, tuner only recommends
+
+copy_trading:
+  enabled: false                  # never in week 1 — too much to vet
+
+tuner:
+  enabled: true
+  evaluation_window_hours: 12     # twice-daily tuning
+  target_fill_rate: 0.25
+  learning_rate: 0.15             # conservative — small, safe steps
+
+websocket:
+  enabled: true
+  url: "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+  ping_interval_sec: 10
+  max_staleness_sec: 10           # fall back to REST fast
+
+observability:
+  prometheus_enabled: true
+  prometheus_port: 9464
+  alert_webhook_url: null         # set to Slack/Discord webhook for push alerts
+  json_logs: false
+
+loop:
+  tick_interval_sec: 2
+  http_timeout_sec: 10
+  retry_max_attempts: 5

@@ -1,0 +1,128 @@
+# Polybot trial config — 7-day paper-mode trial with 3-hour auto-improvement.
+#
+# Use with:  python -m polybot trial --days 7
+#
+# Differs from config.100usd.yaml in three ways:
+#   1. Research + tuner cycle is 3h (not 6h / 12h) so the bot iterates 56×
+#      over a 7-day run.
+#   2. tuner.auto_apply = true — safe in paper mode because no real money
+#      is at risk. The tuner can actually *change* the config each cycle.
+#   3. Sensible defaults for a quiet laptop/Mac Mini: smaller concurrent
+#      market count, gentler rate limits.
+
+scanner:
+  min_liquidity_usd: 10000
+  min_volume_24h_usd: 5000
+  rewards_only: true
+  max_concurrent_markets: 6
+  refresh_interval_sec: 90
+  exclude_closing_within_hours: 6
+
+risk:
+  max_notional_usd: 80
+  max_per_market_usd: 15
+  max_daily_loss_usd: 8
+  max_drawdown_from_peak_usd: 12
+  max_inventory_skew: 50
+  min_order_usd: 5
+
+market_maker:
+  enabled: true
+  target_spread_bps: 40
+  min_edge_over_mid_bps: 15
+  requote_drift_bps: 20
+  requote_interval_sec: 45
+  quote_size_usd: 6
+  join_if_wider_bps: 40
+  tick_size: 0.001
+  use_inventory_skew: true
+  inventory_risk_aversion: 0.15
+  max_skew_shift: 0.02
+  use_adaptive_spread: true
+  sigma_to_spread_multiplier: 10.0
+
+ladder:
+  enabled: true              # on from day 1 in paper — easy to evaluate
+  levels: 2
+  step_bps: 25
+  size_decay: 0.6
+
+allocator:
+  enabled: true
+  min_per_market_usd: 5
+
+arbitrage:
+  enabled: true
+  min_profit_bps: 350
+  max_size_per_arb_usd: 20
+  taker_fee_bps: 200
+
+mean_reversion:
+  enabled: false
+
+cross_market_arb:
+  enabled: false
+
+breaker:
+  enabled: true
+  max_errors_per_minute: 20
+  max_feed_age_sec: 60
+  crash_bps_per_min: 400
+  crash_market_share: 0.25
+  max_api_failure_rate: 0.4
+  cooldown_sec: 90
+
+volatility:
+  window_sec: 300
+  min_samples: 8
+
+history:
+  enabled: true
+  snapshot_interval_sec: 15
+  retention_hours: 168
+  db_path: state/book_history.sqlite
+
+reconciler:
+  enabled: true
+  interval_sec: 180
+  auto_correct: true
+
+health:
+  enabled: true
+  port: 8080
+  host: "127.0.0.1"           # laptop-safe: only bound to loopback
+  max_tick_age_sec: 45
+
+research:
+  enabled: true
+  interval_hours: 3           # every 3h
+  leaderboard_window: "7d"
+  top_wallets: 50
+  report_dir: state/research
+  auto_apply: true            # safe in paper mode
+
+copy_trading:
+  enabled: false
+
+tuner:
+  enabled: true
+  evaluation_window_hours: 3  # every 3h
+  target_fill_rate: 0.25
+  learning_rate: 0.15
+
+websocket:
+  enabled: true
+  url: "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+  ping_interval_sec: 10
+  max_staleness_sec: 10
+
+observability:
+  prometheus_enabled: true
+  prometheus_port: 9464
+  alert_webhook_url: null
+  json_logs: false
+
+loop:
+  tick_interval_sec: 2
+  http_timeout_sec: 10
+  retry_max_attempts: 5

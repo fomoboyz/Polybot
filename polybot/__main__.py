@@ -14,6 +14,7 @@ from .config import load_config, load_secrets
 from .observability import configure_logging as _setup_logging
 from .report import render_markdown, run_report
 from .research import ResearchEngine
+from .trial import TrialRunner
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -61,6 +62,21 @@ def _cmd_backtest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_trial(args: argparse.Namespace) -> int:
+    """Run a fixed-duration paper trial (default 7 days, 3h auto-improve)."""
+    secrets = load_secrets(require_wallet=False)
+    cfg = load_config(args.config)
+    _setup_logging(secrets.log_level, cfg.observability.json_logs)
+    trial = TrialRunner(
+        duration_hours=args.days * 24.0,
+        checkpoint_interval_hours=args.checkpoint_hours,
+        starting_balance_usd=args.starting_balance,
+        fresh=args.fresh,
+    )
+    Polybot(cfg=cfg, secrets=secrets, dry_run=False, paper=True, trial=trial).run()
+    return 0
+
+
 def _cmd_research(args: argparse.Namespace) -> int:
     secrets = load_secrets(require_wallet=False)
     cfg = load_config(args.config)
@@ -98,6 +114,20 @@ def main() -> int:
     res = sub.add_parser("research", help="Run one research pass and exit")
     res.add_argument("--config", default=None)
     res.set_defaults(func=_cmd_research)
+
+    tr = sub.add_parser(
+        "trial",
+        help="Run a fixed-duration paper trial (real data, simulated fills)",
+    )
+    tr.add_argument("--config", default="config.trial.yaml")
+    tr.add_argument("--days", type=float, default=7.0)
+    tr.add_argument("--checkpoint-hours", type=float, default=3.0)
+    tr.add_argument("--starting-balance", type=float, default=100.0)
+    tr.add_argument(
+        "--fresh", action="store_true",
+        help="Ignore any existing trial state and start a new trial",
+    )
+    tr.set_defaults(func=_cmd_trial)
 
     bt = sub.add_parser("backtest", help="Replay recorded books against current config")
     bt.add_argument("--config", default=None)

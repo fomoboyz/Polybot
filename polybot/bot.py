@@ -43,6 +43,7 @@ from .strategies import (
     MeanReversionStrategy,
     Strategy,
 )
+from .trial import TrialRunner
 from .tuner import AutoTuner
 from .volatility import VolatilityTracker
 from .websocket_feed import WebSocketFeed
@@ -57,7 +58,9 @@ class Polybot:
         secrets: Secrets,
         dry_run: bool = False,
         paper: bool = False,
+        trial: Optional[TrialRunner] = None,
     ):
+        self._trial = trial
         configure_logging(secrets.log_level, cfg.observability.json_logs)
         self._cfg = cfg
         self._secrets = secrets
@@ -167,12 +170,23 @@ class Polybot:
         self._alerter.fire("info", f"polybot started mode={mode}")
         try:
             while not self._shutdown:
+                if self._trial is not None and self._trial.should_exit():
+                    log.info("trial duration reached — finalizing")
+                    self._trial.finalize(self._risk)
+                    break
                 t0 = time.time()
                 try:
                     self._tick()
                 except Exception as e:
                     log.exception("tick error: %s", e)
                     self._breaker.record_error()
+                if self._trial is not None and self._trial.checkpoint_due():
+                    try:
+                        self._trial.record_checkpoint(
+                            self._risk, self._executor.resting_count(),
+                        )
+                    except Exception as e:
+                        log.warning("trial checkpoint error: %s", e)
                 if self._prom.tick_latency is not None:
                     self._prom.tick_latency.observe(time.time() - t0)
                 time.sleep(self._cfg.loop.tick_interval_sec)

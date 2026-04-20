@@ -23,6 +23,7 @@ from .circuit_breaker import BreakerConfig, CircuitBreaker
 from .clob import ClobClientWrapper
 from .config import Config, Secrets
 from .copy_trading import CopyTrader
+from .dashboard import Dashboard
 from .executor import OrderExecutor
 from .gamma import GammaClient
 from .health import HealthServer, HealthState
@@ -131,6 +132,16 @@ class Polybot:
 
         self._health = HealthState(max_tick_age_sec=cfg.health.max_tick_age_sec)
         self._health.register_provider(self._health_snapshot)
+        mode = "LIVE" if not (dry_run or paper) else ("PAPER" if paper else "DRY-RUN")
+        self._dashboard = Dashboard(
+            cfg=cfg,
+            risk=self._risk,
+            executor=self._executor,
+            breaker=self._breaker,
+            mode=mode,
+            trial=trial,
+        )
+        self._health.attach_dashboard(self._dashboard)
         self._health_server: Optional[HealthServer] = None
         if cfg.health.enabled:
             self._health_server = HealthServer(

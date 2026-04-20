@@ -1,14 +1,13 @@
-"""Tiny HTTP health endpoint.
+"""Tiny HTTP health endpoint + local read-only dashboard.
 
 Serves:
-  GET /health   → 200 if the bot is operational (breaker untripped,
-                  kill-switch off, last tick recent), else 503.
-  GET /ready    → 200 once the first tick has completed.
-  GET /status   → 200 with JSON snapshot of runtime state.
+  GET /health      → 200 if operational, else 503
+  GET /ready       → 200 once the first tick has completed
+  GET /status      → 200 with JSON snapshot of runtime state
+  GET /            → dashboard HTML (if attached)
+  GET /api/<name>  → dashboard JSON resources (if attached)
 
-Designed for Kubernetes liveness/readiness probes, systemd watchdog, or a
-plain uptime monitor. Runs in a dedicated daemon thread; never blocks the
-main loop.
+Runs in a dedicated daemon thread; never blocks the main loop.
 """
 
 from __future__ import annotations
@@ -18,7 +17,10 @@ import logging
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
+
+if TYPE_CHECKING:
+    from .dashboard import Dashboard
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +31,7 @@ class HealthState:
         self.ready = False
         self.last_tick_ts: float = 0.0
         self._provider: Optional[Callable[[], dict]] = None
+        self.dashboard: Optional["Dashboard"] = None
 
     def mark_tick(self) -> None:
         self.last_tick_ts = time.time()
@@ -36,6 +39,9 @@ class HealthState:
 
     def register_provider(self, provider: Callable[[], dict]) -> None:
         self._provider = provider
+
+    def attach_dashboard(self, dashboard: "Dashboard") -> None:
+        self.dashboard = dashboard
 
     def is_healthy(self) -> bool:
         if not self.ready:
@@ -76,13 +82,24 @@ class _Handler(BaseHTTPRequestHandler):
     state: HealthState  # set by server
 
     def do_GET(self):  # noqa: N802 — BaseHTTPRequestHandler API
-        if self.path == "/health":
+        path = self.path.split("?", 1)[0]
+        if path == "/health":
             ok = self.state.is_healthy()
             self._write(200 if ok else 503, {"ok": ok})
-        elif self.path == "/ready":
+        elif path == "/ready":
             self._write(200 if self.state.ready else 503, {"ready": self.state.ready})
-        elif self.path == "/status":
+        elif path == "/status":
             self._write(200, self.state.snapshot())
+        elif path == "/" and self.state.dashboard is not None:
+            from .dashboard import HTML
+            self._write_html(200, HTML)
+        elif path.startswith("/api/") and self.state.dashboard is not None:
+            name = path[len("/api/"):].strip("/")
+            payload = self.state.dashboard.resource(name)
+            if payload is None:
+                self._write(404, {"error": f"unknown resource: {name}"})
+            else:
+                self._write(200, payload)
         else:
             self._write(404, {"error": "not found"})
 
@@ -90,6 +107,14 @@ class _Handler(BaseHTTPRequestHandler):
         payload = json.dumps(body, default=str).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _write_html(self, code: int, html: str) -> None:
+        payload = html.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)

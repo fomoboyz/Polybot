@@ -95,14 +95,33 @@ it with Ctrl-C.
 
 ## 3. Monitor progress
 
+### Web dashboard (easiest)
+
+Open **http://localhost:8080/** in your browser while the bot runs. The
+page auto-refreshes every 5 seconds and shows:
+
+- Live balance + PnL + drawdown vs. risk limits
+- Trial progress bar (elapsed / remaining hours)
+- Which strategies are on and their current parameters
+- Open positions with avg cost + realized PnL
+- All resting orders with age
+- Recent fills
+- Every tuner change the bot has auto-applied (with the reason)
+- Latest research analysis (top wallets, markets, recommendations)
+- Full checkpoint history
+
+It's read-only — you can't accidentally cancel anything from the page.
+
+### Terminal (also available)
+
 ```bash
 # Live logs:
 tail -f state/polybot.out.log
 
-# Bot health:
+# Raw JSON health:
 curl -s localhost:8080/status | jq
 
-# Latest progress report:
+# Latest progress report (markdown):
 cat state/trial/progress-latest.md
 
 # All checkpoints:

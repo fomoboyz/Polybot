@@ -25,6 +25,11 @@ scanner:
   # Skip dead markets where mid is pinned near 0 or 1 — no flow = no fills.
   min_mid_price: 0.15
   max_mid_price: 0.85
+  # Skip jumpy markets (live tennis/sports, breaking news). Passive
+  # market-making needs stable prices; 800 bps in 60s is a point-change
+  # in a tennis match, not a tradeable regime.
+  max_recent_move_bps: 800
+  recent_move_lookback_sec: 60
 
 risk:
   max_notional_usd: 80
@@ -80,8 +85,11 @@ breaker:
   enabled: true
   max_errors_per_minute: 20
   max_feed_age_sec: 60
-  crash_bps_per_min: 400
-  crash_market_share: 0.25
+  # Per-market fast-move guard already pulls quotes from volatile markets.
+  # The global breaker should ONLY trip on genuine market-wide chaos,
+  # not on a couple of live-event markets (sports, news-driven) being jumpy.
+  crash_bps_per_min: 1500         # 15% mid move in 60s = actual crash
+  crash_market_share: 0.66        # 2/3 of universe must crash simultaneously
   max_api_failure_rate: 0.4
   cooldown_sec: 90
 

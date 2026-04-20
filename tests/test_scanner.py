@@ -101,3 +101,59 @@ def test_scanner_drops_markets_below_min_mid():
     )
     active = scanner.active_markets()
     assert active == []
+
+
+def test_scanner_drops_jumpy_markets_when_vol_tracker_provided():
+    """A market that just moved 1200 bps in 60s is too hot to quote
+    passively — scanner should drop it."""
+    from polybot.volatility import VolatilityTracker
+    import time
+
+    jumpy = _mk("jumpy")
+    calm = _mk("calm")
+    books = {
+        "jumpy": _book("jumpy", 0.49, 0.51),
+        "calm": _book("calm", 0.49, 0.51),
+    }
+    vol = VolatilityTracker(window_sec=300, min_samples=2)
+    now = time.time()
+    # Seed volatility: jumpy moved 50% in 30s, calm moved 0.4%.
+    vol.update("jumpy", now - 30, 0.50)
+    vol.update("jumpy", now, 0.56)   # 1200 bps
+    vol.update("calm", now - 30, 0.50)
+    vol.update("calm", now, 0.502)   # 40 bps
+
+    scanner = MarketScanner(
+        gamma=_StubGamma([jumpy, calm]),
+        clob=_StubClob(books),
+        scanner_cfg=ScannerCfg(
+            min_mid_price=0.15, max_mid_price=0.85,
+            max_recent_move_bps=800,
+            recent_move_lookback_sec=60,
+            max_concurrent_markets=5,
+        ),
+        mm_cfg=MarketMakerCfg(),
+        volatility=vol,
+    )
+    active = scanner.active_markets()
+    ids = {m.token_id for m in active}
+    assert "calm" in ids
+    assert "jumpy" not in ids
+
+
+def test_scanner_keeps_all_markets_when_no_vol_tracker():
+    """Without volatility data, the jumpy-filter is skipped (first run)."""
+    m = _mk("m1")
+    books = {"m1": _book("m1", 0.49, 0.51)}
+    scanner = MarketScanner(
+        gamma=_StubGamma([m]),
+        clob=_StubClob(books),
+        scanner_cfg=ScannerCfg(
+            min_mid_price=0.15, max_mid_price=0.85,
+            max_concurrent_markets=5,
+        ),
+        mm_cfg=MarketMakerCfg(),
+        volatility=None,
+    )
+    active = scanner.active_markets()
+    assert {m.token_id for m in active} == {"m1"}

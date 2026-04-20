@@ -87,15 +87,16 @@ class Polybot:
 
         self._risk = RiskManager(cfg.risk)
         self._executor = OrderExecutor(self._clob, self._risk)
+        self._vol = VolatilityTracker(
+            window_sec=cfg.volatility.window_sec,
+            min_samples=cfg.volatility.min_samples,
+        )
         self._scanner = MarketScanner(
             gamma=self._gamma,
             clob=self._clob,
             scanner_cfg=cfg.scanner,
             mm_cfg=cfg.market_maker,
-        )
-        self._vol = VolatilityTracker(
-            window_sec=cfg.volatility.window_sec,
-            min_samples=cfg.volatility.min_samples,
+            volatility=self._vol,
         )
         self._breaker = CircuitBreaker(BreakerConfig(
             max_errors_per_minute=cfg.breaker.max_errors_per_minute,

@@ -32,6 +32,11 @@ class ScannerCfg(BaseModel):
     # liquidity but no active flow, so our passive quotes never fill.
     min_mid_price: float = 0.10
     max_mid_price: float = 0.90
+    # Drop markets that just moved too fast (live tennis, breaking news,
+    # etc.). Passive market-making on a jumpy market is net-losing because
+    # the fast-move guard keeps cancelling our quotes.
+    max_recent_move_bps: float = 800.0
+    recent_move_lookback_sec: float = 60.0
 
 
 class RiskCfg(BaseModel):

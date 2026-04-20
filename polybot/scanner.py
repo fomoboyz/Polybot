@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from .clob import ClobClientWrapper
 from .config import MarketMakerCfg, ScannerCfg
 from .gamma import GammaClient
 from .models import OrderBook, TokenMarket
 from .reward_optimizer import rank_markets_by_reward
+from .volatility import VolatilityTracker
 
 log = logging.getLogger(__name__)
 
@@ -22,11 +23,13 @@ class MarketScanner:
         clob: ClobClientWrapper,
         scanner_cfg: ScannerCfg,
         mm_cfg: MarketMakerCfg,
+        volatility: Optional[VolatilityTracker] = None,
     ):
         self._gamma = gamma
         self._clob = clob
         self._scanner_cfg = scanner_cfg
         self._mm_cfg = mm_cfg
+        self._vol = volatility
         self._last_refresh: float = 0.0
         self._cached: List[TokenMarket] = []
 
@@ -68,7 +71,10 @@ class MarketScanner:
         # stale liquidity but no active flow, so passive quotes never fill.
         lo = self._scanner_cfg.min_mid_price
         hi = self._scanner_cfg.max_mid_price
+        max_move = self._scanner_cfg.max_recent_move_bps
+        lookback = self._scanner_cfg.recent_move_lookback_sec
         dropped_extreme = 0
+        dropped_jumpy = 0
         filtered: list[TokenMarket] = []
         for m in subset:
             book = books.get(m.token_id)
@@ -78,16 +84,25 @@ class MarketScanner:
             if book.midpoint < lo or book.midpoint > hi:
                 dropped_extreme += 1
                 continue
+            # Volatility gate: drop markets that just moved too fast.
+            if self._vol is not None:
+                move = self._vol.midpoint_delta_bps(
+                    m.token_id, lookback_sec=lookback,
+                )
+                if move is not None and move >= max_move:
+                    dropped_jumpy += 1
+                    continue
             filtered.append(m)
 
         ranked = rank_markets_by_reward(filtered, books, self._mm_cfg)
         self._cached = [m for m, _ in ranked[: self._scanner_cfg.max_concurrent_markets]]
         log.info(
-            "scanner: %d candidates → %d after mid filter → %d active "
-            "(dropped %d near-certainty; first: %s)",
+            "scanner: %d candidates → %d after filters → %d active "
+            "(dropped %d near-certainty, %d jumpy; first: %s)",
             len(candidates),
             len(filtered),
             len(self._cached),
             dropped_extreme,
+            dropped_jumpy,
             self._cached[0].question[:60] if self._cached else "-",
         )

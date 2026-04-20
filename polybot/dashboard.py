@@ -151,58 +151,82 @@ class Dashboard:
         mm = cfg.market_maker
         return [
             {
-                "name": "market_maker",
+                "name": "Market maker",
                 "enabled": mm.enabled,
-                "params": {
-                    "target_spread_bps": mm.target_spread_bps,
-                    "min_edge_over_mid_bps": mm.min_edge_over_mid_bps,
-                    "quote_size_usd": mm.quote_size_usd,
-                    "requote_drift_bps": mm.requote_drift_bps,
-                    "requote_interval_sec": mm.requote_interval_sec,
-                    "use_inventory_skew": mm.use_inventory_skew,
-                    "inventory_risk_aversion": mm.inventory_risk_aversion,
-                    "use_adaptive_spread": mm.use_adaptive_spread,
-                },
+                "summary": (
+                    f"Places passive buy/sell quotes {mm.target_spread_bps:.0f} bps "
+                    f"wide around mid, in ${mm.quote_size_usd:.0f} clips, refreshed "
+                    f"every {mm.requote_interval_sec:.0f}s or when mid drifts "
+                    f"{mm.requote_drift_bps:.0f} bps. Harvests Polymarket LP rewards "
+                    f"and captures the spread."
+                ),
+                "detail": (
+                    (
+                        "Skews quotes toward flat inventory "
+                        f"(aversion {mm.inventory_risk_aversion:.2f}). "
+                        if mm.use_inventory_skew else ""
+                    ) + (
+                        "Widens spread when volatility rises."
+                        if mm.use_adaptive_spread else ""
+                    )
+                ).strip(),
             },
             {
-                "name": "arbitrage",
+                "name": "Arbitrage",
                 "enabled": cfg.arbitrage.enabled,
-                "params": {
-                    "min_profit_bps": cfg.arbitrage.min_profit_bps,
-                    "max_size_per_arb_usd": cfg.arbitrage.max_size_per_arb_usd,
-                    "taker_fee_bps": cfg.arbitrage.taker_fee_bps,
-                },
+                "summary": (
+                    f"Buys YES + NO when their prices sum to <$1 by at least "
+                    f"{cfg.arbitrage.min_profit_bps:.0f} bps net of "
+                    f"{cfg.arbitrage.taker_fee_bps:.0f} bps fees. "
+                    f"Up to ${cfg.arbitrage.max_size_per_arb_usd:.0f} per trade. "
+                    f"Risk-free if filled."
+                ),
+                "detail": "",
             },
             {
-                "name": "mean_reversion",
+                "name": "Mean reversion",
                 "enabled": cfg.mean_reversion.enabled,
-                "params": {
-                    "window_sec": cfg.mean_reversion.window_sec,
-                    "zscore_trigger": cfg.mean_reversion.zscore_trigger,
-                    "position_size_usd": cfg.mean_reversion.position_size_usd,
-                },
+                "summary": (
+                    f"Fades moves that stretch more than "
+                    f"{cfg.mean_reversion.zscore_trigger:.1f}σ from the "
+                    f"{cfg.mean_reversion.window_sec:.0f}s rolling average, "
+                    f"taking ${cfg.mean_reversion.position_size_usd:.0f} positions."
+                ),
+                "detail": "",
             },
             {
-                "name": "ladder",
+                "name": "Ladder",
                 "enabled": cfg.ladder.enabled,
-                "params": {
-                    "levels": cfg.ladder.levels,
-                    "step_bps": cfg.ladder.step_bps,
-                    "size_decay": cfg.ladder.size_decay,
-                },
+                "summary": (
+                    f"Stacks {cfg.ladder.levels} quote levels per side, each "
+                    f"{cfg.ladder.step_bps:.0f} bps deeper than the last. "
+                    f"Each level is {int(cfg.ladder.size_decay*100)}% the size of "
+                    f"the one before it. Lets the bot earn from multiple price "
+                    f"points at once."
+                ),
+                "detail": "",
             },
             {
-                "name": "allocator",
+                "name": "Allocator",
                 "enabled": cfg.allocator.enabled,
-                "params": {"min_per_market_usd": cfg.allocator.min_per_market_usd},
+                "summary": (
+                    f"Splits the bankroll across markets proportional to expected "
+                    f"reward score (tighter × bigger quotes rank higher). "
+                    f"Minimum ${cfg.allocator.min_per_market_usd:.0f} per market "
+                    f"or skip it."
+                ),
+                "detail": "",
             },
             {
-                "name": "copy_trading",
+                "name": "Copy trading",
                 "enabled": cfg.copy_trading.enabled,
-                "params": {
-                    "max_wallets_to_follow": cfg.copy_trading.max_wallets_to_follow,
-                    "mirror_size_usd": cfg.copy_trading.mirror_size_usd,
-                },
+                "summary": (
+                    f"Mirrors up to {cfg.copy_trading.max_wallets_to_follow} top "
+                    f"performing wallets with ${cfg.copy_trading.mirror_size_usd:.0f} "
+                    f"positions. Off by default — enable after research validates "
+                    f"which wallets are profitable."
+                ),
+                "detail": "",
             },
         ]
 
@@ -415,13 +439,15 @@ HTML = r"""<!doctype html>
   .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 900px) { .two-col { grid-template-columns: 1fr; } }
   .strat-row {
-    display: flex; align-items: center; gap: 12px; padding: 8px 0;
+    display: flex; align-items: flex-start; gap: 12px; padding: 10px 0;
     border-bottom: 1px solid var(--border);
   }
   .strat-row:last-child { border-bottom: none; }
-  .strat-name { font-weight: 600; min-width: 130px; }
-  .strat-params { color: var(--muted); font-size: 12px;
-                  font-variant-numeric: tabular-nums; }
+  .strat-body { flex: 1; min-width: 0; }
+  .strat-name { font-weight: 600; margin-bottom: 2px; }
+  .strat-summary { color: var(--text); font-size: 13px; line-height: 1.45; }
+  .strat-detail { color: var(--muted); font-size: 12px; line-height: 1.4;
+                  margin-top: 3px; }
   .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
   .rec { background: var(--panel2); padding: 10px 12px; border-radius: 6px;
          margin: 6px 0; }
@@ -599,14 +625,16 @@ async function renderStrategies() {
       `<div class="empty">no strategies</div>`; return;
   }
   const html = rows.map(s => {
-    const params = Object.entries(s.params)
-      .map(([k, v]) => `${k}=${typeof v === "number" ? v : v}`).join(" · ");
     const cls = s.enabled ? "badge-ok" : "badge-warn";
     const badge = s.enabled ? "ON" : "off";
+    const detail = s.detail ? `<div class="strat-detail">${s.detail}</div>` : "";
     return `<div class="strat-row">
       <span class="badge ${cls}">${badge}</span>
-      <span class="strat-name">${s.name}</span>
-      <span class="strat-params">${params}</span>
+      <div class="strat-body">
+        <div class="strat-name">${s.name}</div>
+        <div class="strat-summary">${s.summary}</div>
+        ${detail}
+      </div>
     </div>`;
   }).join("");
   document.getElementById("strategies-list").innerHTML = html;

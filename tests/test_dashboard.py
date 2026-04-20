@@ -77,9 +77,10 @@ def test_strategies_reports_enabled_flags(workdir):
     d, _, _ = _build()
     rows = d.resource("strategies")["data"]
     names = {r["name"] for r in rows}
-    assert {"market_maker", "arbitrage", "ladder", "allocator"} <= names
-    mm = next(r for r in rows if r["name"] == "market_maker")
-    assert "target_spread_bps" in mm["params"]
+    assert {"Market maker", "Arbitrage", "Ladder", "Allocator"} <= names
+    mm = next(r for r in rows if r["name"] == "Market maker")
+    assert mm["summary"]  # plain-English description is non-empty
+    assert "bps" in mm["summary"]
 
 
 def test_fills_queries_sqlite(workdir):

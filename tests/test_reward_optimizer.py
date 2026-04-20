@@ -103,3 +103,40 @@ def test_score_uses_cfg_quote_size_when_not_passed():
     big = compute_quote_pair(_market(), _book(0.49, 0.51), cfg_big)
     assert small is not None and big is not None
     assert big.expected_score > small.expected_score
+
+
+def test_quote_steps_inside_tight_competitor():
+    """When the real book has a TIGHTER spread than our target, we must
+    step inside (by one tick) rather than quoting at our wider target —
+    otherwise we sit behind the best and never fill."""
+    # Real market: bid 0.498 / ask 0.502 (40 bps total spread).
+    # Our target: 100 bps half-spread. Naive target would be 0.49 / 0.51,
+    # behind the best. Correct behavior: step inside to 0.499 / 0.501.
+    cfg = MarketMakerCfg(
+        target_spread_bps=100, min_edge_over_mid_bps=5,
+    )
+    book = _book(0.498, 0.502)
+    pair = compute_quote_pair(_market(), book, cfg)
+    assert pair is not None
+    # Our bid must be strictly better than the competitor's best bid.
+    assert pair.bid > 0.498, f"bid {pair.bid} is behind best_bid 0.498"
+    assert pair.ask < 0.502, f"ask {pair.ask} is behind best_ask 0.502"
+
+
+def test_quote_matches_or_beats_best_on_all_books():
+    """Whatever the competitor's spread (as long as it's >= 2 ticks wide),
+    our bid should be ≥ best_bid and ask ≤ best_ask — at or inside the book.
+    On markets with 1-tick spread the optimizer correctly returns None
+    (no room to quote inside)."""
+    cfg = MarketMakerCfg(target_spread_bps=30, min_edge_over_mid_bps=5)
+    for spread_bps in [40, 80, 200]:
+        half = spread_bps / 2 / 10000
+        book = _book(0.50 - half, 0.50 + half)
+        pair = compute_quote_pair(_market(), book, cfg)
+        assert pair is not None, f"no quote on {spread_bps}bps spread"
+        assert pair.bid >= book.bids[0].price, (
+            f"spread={spread_bps}bps: bid {pair.bid} < best_bid {book.bids[0].price}"
+        )
+        assert pair.ask <= book.asks[0].price, (
+            f"spread={spread_bps}bps: ask {pair.ask} > best_ask {book.asks[0].price}"
+        )

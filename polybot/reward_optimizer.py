@@ -76,22 +76,31 @@ def compute_quote_pair(
 
     half = max(target_half, floor_half)
 
-    # If competitors are wider than target by the join threshold, step inside.
-    join_trigger = cfg.join_if_wider_bps / 10000.0
-    if book.best_bid and book.best_ask:
-        competitor_half = (book.best_ask.price - book.best_bid.price) / 2.0
-        if competitor_half > target_half + join_trigger:
-            bid = _snap(book.best_bid.price + tick, tick)
-            ask = _snap(book.best_ask.price - tick, tick)
-            if (
-                bid < reservation - floor_half
-                and ask > reservation + floor_half
-                and ask > bid
-            ):
-                return _package(bid, ask, reservation, mid, market, size_usd)
-
+    # Start from our preferred target quote around the reservation price.
     bid = _snap(reservation - half, tick)
     ask = _snap(reservation + half, tick)
+
+    # ---- join/step-inside logic ------------------------------------------
+    # Polymarket LP rewards pay ONLY when we're at or inside the best
+    # quote. If a competitor is already tighter than our target, the
+    # target-spread quote sits behind them and never fills. Fix: always
+    # step inside the competitor by one tick (take queue priority), as
+    # long as we still keep the min_edge_over_mid_bps floor.
+    if book.best_bid and book.best_ask:
+        step_bid = _snap(book.best_bid.price + tick, tick)
+        step_ask = _snap(book.best_ask.price - tick, tick)
+        # If our target bid is not already better than the best bid, step
+        # inside. Same for ask.
+        if bid <= book.best_bid.price:
+            bid = step_bid
+        if ask >= book.best_ask.price:
+            ask = step_ask
+        # Respect the minimum edge from reservation (avoid adverse quotes).
+        if bid > reservation - floor_half:
+            bid = _snap(reservation - floor_half, tick)
+        if ask < reservation + floor_half:
+            ask = _snap(reservation + floor_half, tick)
+
     bid = max(tick, bid)
     ask = min(1.0 - tick, ask)
     if ask <= bid:

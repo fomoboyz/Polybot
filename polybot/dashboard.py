@@ -127,6 +127,12 @@ class Dashboard:
                 "checkpoint_interval_hours": s.checkpoint_interval_hours,
                 "n_checkpoints": len(s.checkpoints),
                 "finalized": s.finalized,
+                "tuner_interval_min": round(
+                    self._cfg.tuner.evaluation_window_hours * 60.0, 1,
+                ),
+                "research_interval_min": round(
+                    self._cfg.research.interval_hours * 60.0, 1,
+                ),
             }
         return out
 
@@ -448,6 +454,9 @@ HTML = r"""<!doctype html>
   .strat-summary { color: var(--text); font-size: 13px; line-height: 1.45; }
   .strat-detail { color: var(--muted); font-size: 12px; line-height: 1.4;
                   margin-top: 3px; }
+  .trial-cadences { color: var(--muted); font-size: 12px;
+                    margin-top: 6px; line-height: 1.5; }
+  .trial-cadences b { color: var(--text); font-weight: 600; }
   .empty { color: var(--muted); font-style: italic; padding: 8px 0; }
   .rec { background: var(--panel2); padding: 10px 12px; border-radius: 6px;
          margin: 6px 0; }
@@ -607,14 +616,20 @@ async function renderOverview() {
     const ts = document.getElementById("trial-section");
     ts.style.display = "block";
     document.getElementById("trial-bar").style.width = d.trial.progress_pct + "%";
+    const tunerMin = d.trial.tuner_interval_min;
+    const researchMin = d.trial.research_interval_min;
     document.getElementById("trial-info").innerHTML =
       `<b>${d.trial.elapsed_hours.toFixed(1)}h</b> elapsed of
        ${d.trial.duration_hours.toFixed(0)}h
        (${d.trial.progress_pct.toFixed(1)}%) ·
-       <b>${d.trial.remaining_hours.toFixed(1)}h</b> remaining ·
-       ${d.trial.n_checkpoints} checkpoints ·
-       checkpoint every ${d.trial.checkpoint_interval_hours}h
-       ${d.trial.finalized ? "· <b>FINALIZED</b>" : ""}`;
+       <b>${d.trial.remaining_hours.toFixed(1)}h</b> remaining
+       ${d.trial.finalized ? "· <b>FINALIZED</b>" : ""}
+       <div class="trial-cadences">
+         self-improves every <b>${tunerMin} min</b> ·
+         researches top wallets every <b>${researchMin} min</b> ·
+         writes progress report every <b>${d.trial.checkpoint_interval_hours}h</b>
+         (${d.trial.n_checkpoints} so far)
+       </div>`;
   }
 }
 

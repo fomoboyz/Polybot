@@ -64,11 +64,30 @@ class MarketScanner:
             except Exception as e:
                 log.debug("book fetch failed %s: %s", m.token_id[:10], e)
 
-        ranked = rank_markets_by_reward(subset, books, self._mm_cfg)
+        # Drop near-certainty markets (mid pinned near 0 or 1). They have
+        # stale liquidity but no active flow, so passive quotes never fill.
+        lo = self._scanner_cfg.min_mid_price
+        hi = self._scanner_cfg.max_mid_price
+        dropped_extreme = 0
+        filtered: list[TokenMarket] = []
+        for m in subset:
+            book = books.get(m.token_id)
+            if book is None or book.midpoint is None:
+                filtered.append(m)  # keep — unknown, let optimizer decide
+                continue
+            if book.midpoint < lo or book.midpoint > hi:
+                dropped_extreme += 1
+                continue
+            filtered.append(m)
+
+        ranked = rank_markets_by_reward(filtered, books, self._mm_cfg)
         self._cached = [m for m, _ in ranked[: self._scanner_cfg.max_concurrent_markets]]
         log.info(
-            "scanner: %d candidates → %d active (first: %s)",
+            "scanner: %d candidates → %d after mid filter → %d active "
+            "(dropped %d near-certainty; first: %s)",
             len(candidates),
+            len(filtered),
             len(self._cached),
+            dropped_extreme,
             self._cached[0].question[:60] if self._cached else "-",
         )

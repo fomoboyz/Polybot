@@ -28,6 +28,10 @@ class ScannerCfg(BaseModel):
     max_concurrent_markets: PositiveInt = 25
     refresh_interval_sec: PositiveInt = 60
     exclude_closing_within_hours: float = 2.0
+    # Skip markets where mid is pinned near 0 or 1 — they have stale
+    # liquidity but no active flow, so our passive quotes never fill.
+    min_mid_price: float = 0.10
+    max_mid_price: float = 0.90
 
 
 class RiskCfg(BaseModel):

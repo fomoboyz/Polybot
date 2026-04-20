@@ -22,6 +22,9 @@ scanner:
   max_concurrent_markets: 6
   refresh_interval_sec: 90
   exclude_closing_within_hours: 6
+  # Skip dead markets where mid is pinned near 0 or 1 — no flow = no fills.
+  min_mid_price: 0.15
+  max_mid_price: 0.85
 
 risk:
   max_notional_usd: 80

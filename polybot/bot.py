@@ -267,7 +267,8 @@ class Polybot:
             return
 
         if self._paper:
-            for fill in self._clob.drain_paper_fills(books):
+            markets_by_token = {m.token_id: m for m in markets}
+            for fill in self._clob.drain_paper_fills(books, markets_by_token):
                 self._on_paper_fill(fill)
 
         for strat in self._strategies:

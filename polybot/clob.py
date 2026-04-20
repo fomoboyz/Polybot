@@ -22,7 +22,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from .models import BookLevel, OrderBook, Quote
+from .models import BookLevel, OrderBook, Quote, TokenMarket
 from .paper import PaperBroker, SimFill
 
 log = logging.getLogger(__name__)
@@ -119,10 +119,14 @@ class ClobClientWrapper:
 
     # ---- paper-mode fill drain ----
 
-    def drain_paper_fills(self, books: Dict[str, OrderBook]) -> List[SimFill]:
+    def drain_paper_fills(
+        self,
+        books: Dict[str, OrderBook],
+        markets: Optional[Dict[str, TokenMarket]] = None,
+    ) -> List[SimFill]:
         if self._paper_broker is None:
             return []
-        return self._paper_broker.match_fills(books)
+        return self._paper_broker.match_fills(books, markets=markets)
 
     # ---- write ----
 

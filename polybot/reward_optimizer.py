@@ -42,12 +42,15 @@ def compute_quote_pair(
     cfg: MarketMakerCfg,
     inventory_shares: float = 0.0,
     sigma: Optional[float] = None,
+    size_usd: Optional[float] = None,
 ) -> Optional[QuotePair]:
     mid = book.midpoint
     if mid is None or mid <= 0 or mid >= 1:
         return None
 
     tick = market.tick_size or cfg.tick_size
+    if size_usd is None:
+        size_usd = cfg.quote_size_usd
 
     # Layer 2 — reservation price shifts the mid by inventory term.
     reservation = mid
@@ -85,7 +88,7 @@ def compute_quote_pair(
                 and ask > reservation + floor_half
                 and ask > bid
             ):
-                return _package(bid, ask, reservation, mid, market)
+                return _package(bid, ask, reservation, mid, market, size_usd)
 
     bid = _snap(reservation - half, tick)
     ask = _snap(reservation + half, tick)
@@ -93,7 +96,7 @@ def compute_quote_pair(
     ask = min(1.0 - tick, ask)
     if ask <= bid:
         return None
-    return _package(bid, ask, reservation, mid, market)
+    return _package(bid, ask, reservation, mid, market, size_usd)
 
 
 def _package(
@@ -102,16 +105,18 @@ def _package(
     reservation: float,
     mid: float,
     market: TokenMarket,
+    size_usd: float,
 ) -> QuotePair:
     spread = ask - bid
     max_spread = 0.03
     per_side_dist = (ask - mid + mid - bid) / 2.0
     raw = max(0.0, (max_spread - per_side_dist)) / max_spread
+    # Polymarket LP reward is quadratic in tightness AND linear in size.
     return QuotePair(
         bid=bid,
         ask=ask,
         spread=spread,
-        expected_score=raw * raw,
+        expected_score=raw * raw * max(size_usd, 0.0),
         reservation_price=reservation,
     )
 
@@ -125,12 +130,13 @@ def rank_markets_by_reward(
     books: Dict[str, OrderBook],
     cfg: MarketMakerCfg,
 ):
+    """Rank markets by expected LP reward score × size × liquidity weight."""
     ranked: list[Tuple[TokenMarket, QuotePair]] = []
     for m in markets:
         book = books.get(m.token_id)
         if book is None:
             continue
-        pair = compute_quote_pair(m, book, cfg)
+        pair = compute_quote_pair(m, book, cfg, size_usd=cfg.quote_size_usd)
         if pair is None:
             continue
         weight = 1.0 + (m.liquidity_usd / 10000.0)

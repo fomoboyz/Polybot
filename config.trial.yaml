@@ -1,14 +1,19 @@
-# Polybot trial config — 7-day paper-mode trial with 3-hour auto-improvement.
+# Polybot trial config — 7-day paper-mode trial with 10-minute
+# self-improvement cycles.
 #
 # Use with:  python -m polybot trial --days 7
 #
-# Differs from config.100usd.yaml in three ways:
-#   1. Research + tuner cycle is 3h (not 6h / 12h) so the bot iterates 56×
-#      over a 7-day run.
-#   2. tuner.auto_apply = true — safe in paper mode because no real money
-#      is at risk. The tuner can actually *change* the config each cycle.
-#   3. Sensible defaults for a quiet laptop/Mac Mini: smaller concurrent
-#      market count, gentler rate limits.
+# Every 10 minutes the bot:
+#   1. Runs a research pass (top wallets, top markets, recommendations).
+#   2. Runs the auto-tuner (reads the last 60 minutes of fills AND applies
+#      any new research recommendations above the confidence threshold).
+#   3. Writes a fresh snapshot JSON the dashboard reads on the next refresh.
+#
+# Every 3 hours it writes a full progress report (state/trial/progress-*.md).
+#
+# Defaults tuned for volume generation: tight spreads, small but frequent
+# quotes, aggressive requote cadence. Hard risk caps keep any single bad
+# day small.
 
 scanner:
   min_liquidity_usd: 10000
@@ -21,17 +26,17 @@ scanner:
 risk:
   max_notional_usd: 80
   max_per_market_usd: 15
-  max_daily_loss_usd: 8
-  max_drawdown_from_peak_usd: 12
+  max_daily_loss_usd: 5          # stricter than old default for a $100 trial
+  max_drawdown_from_peak_usd: 8
   max_inventory_skew: 50
   min_order_usd: 5
 
 market_maker:
   enabled: true
-  target_spread_bps: 40
-  min_edge_over_mid_bps: 15
+  target_spread_bps: 30          # tighter start for more fills (was 40)
+  min_edge_over_mid_bps: 8       # floor: still > fee drag (was 15)
   requote_drift_bps: 20
-  requote_interval_sec: 45
+  requote_interval_sec: 30       # requote faster (was 45)
   quote_size_usd: 6
   join_if_wider_bps: 40
   tick_size: 0.001
@@ -40,6 +45,11 @@ market_maker:
   max_skew_shift: 0.02
   use_adaptive_spread: true
   sigma_to_spread_multiplier: 10.0
+  # Per-market fast-move guard. If a market's mid moved >200bps in the
+  # last 60s, cancel our orders there and cool down for 60s.
+  fast_move_bps: 200
+  fast_move_lookback_sec: 60
+  fast_move_cooldown_sec: 60
 
 ladder:
   enabled: true              # on from day 1 in paper — easy to evaluate
@@ -95,20 +105,23 @@ health:
 
 research:
   enabled: true
-  interval_hours: 3           # every 3h
+  interval_hours: 0.167       # every 10 minutes
   leaderboard_window: "7d"
   top_wallets: 50
   report_dir: state/research
-  auto_apply: true            # safe in paper mode
+  auto_apply: true            # safe in paper mode — tuner rewrites config
 
 copy_trading:
   enabled: false
 
 tuner:
   enabled: true
-  evaluation_window_hours: 3  # every 3h
+  evaluation_window_hours: 0.167  # fire every 10 minutes
+  lookback_hours: 1.0             # but read 60 min of fills so stats aren't noisy
   target_fill_rate: 0.25
   learning_rate: 0.15
+  min_orders_for_feedback: 10     # allow research-only changes when order count is low
+  research_confidence_threshold: 0.5
 
 websocket:
   enabled: true

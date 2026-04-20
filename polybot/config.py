@@ -55,6 +55,12 @@ class MarketMakerCfg(BaseModel):
     # Adaptive-spread (widen when σ is high).
     use_adaptive_spread: bool = True
     sigma_to_spread_multiplier: float = 8.0
+    # Fast-move guard: if a market's midpoint moved by >fast_move_bps over
+    # fast_move_lookback_sec, skip quoting it for fast_move_cooldown_sec.
+    # Protects against adverse selection when news hits.
+    fast_move_bps: PositiveFloat = 200.0
+    fast_move_lookback_sec: PositiveFloat = 60.0
+    fast_move_cooldown_sec: PositiveFloat = 60.0
 
 
 class ArbitrageCfg(BaseModel):
@@ -111,10 +117,21 @@ class CopyTradingCfg(BaseModel):
 
 class TunerCfg(BaseModel):
     enabled: bool = False
+    # How often the tuner fires.
     evaluation_window_hours: PositiveFloat = 24.0
+    # How much history the tuner reads when computing fill-rate / PnL. Defaults
+    # to evaluation_window_hours when not set, but for a 10-minute tuner you
+    # want a longer lookback (e.g. 60 min) so the stats aren't too noisy.
+    lookback_hours: Optional[PositiveFloat] = None
     target_fill_rate: float = 0.3
     # How aggressively to move parameters each evaluation (0..1).
     learning_rate: float = 0.2
+    # Minimum number of orders in the lookback before the fill-rate feedback
+    # loop fires. Research-driven changes are applied regardless.
+    min_orders_for_feedback: int = 20
+    # Minimum confidence (0..1) on a research recommendation before it's
+    # applied autonomously. Below this, it's only logged.
+    research_confidence_threshold: float = 0.5
 
 
 class LadderCfg(BaseModel):

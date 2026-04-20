@@ -667,7 +667,7 @@ async function renderTuner() {
   const rows = await get("/api/tuner");
   const wrap = document.getElementById("tuner-wrap");
   if (!rows.length) {
-    wrap.innerHTML = `<div class="empty">no tuner changes yet — first evaluation after 3h</div>`;
+    wrap.innerHTML = `<div class="empty">no tuner changes yet — evaluated every 10 min</div>`;
     return;
   }
   wrap.innerHTML = `<table><thead><tr>
